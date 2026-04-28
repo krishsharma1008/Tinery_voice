@@ -1,0 +1,5 @@
+2026-04-28 14:10 IST
+- Pushed all current workspace changes to `origin/main` (repo: `krishsharma1008/Tinery_voice`).
+- Added new files: `services/calendar-bridge/` (Python service), `PLAN.md`, `Tineri_Product_Sheet.pdf`, and `.DS_Store` files.
+- Note: `voice-itinerary/` was committed as an embedded git repository (gitlink entry). This means the outer repo does not contain the inner repo’s file contents. If you want `voice-itinerary` included as normal tracked files, we should remove the gitlink and re-add the directory contents; if you want it as a true submodule, we should add it via `git submodule add <url> voice-itinerary`.
+
