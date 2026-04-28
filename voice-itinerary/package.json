@@ -1,0 +1,34 @@
+{
+  "name": "voice-itinerary",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "calendar:install": "cd ../services/calendar-bridge && uv sync && uv run playwright install chromium",
+    "calendar:setup": "cd ../services/calendar-bridge && uv run python -m scripts.setup",
+    "calendar:bridge": "cd ../services/calendar-bridge && uv run uvicorn bridge.main:app --host 127.0.0.1 --port 8765"
+  },
+  "dependencies": {
+    "framer-motion": "^12.38.0",
+    "lucide-react": "^1.11.0",
+    "nanoid": "^5.1.9",
+    "next": "16.2.4",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "zod": "^4.3.6",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "tailwindcss": "^4",
+    "tsx": "^4.21.0",
+    "typescript": "^5"
+  }
+}
