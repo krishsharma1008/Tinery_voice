@@ -5,6 +5,7 @@ import {
   timeToMinutes,
   minutesToTime,
   dateToWeekday,
+  useItineraryStore,
 } from "@/lib/store/itinerary";
 
 describe("itinerary.formatItinerarySnapshot", () => {
@@ -125,6 +126,23 @@ describe("itinerary.formatItinerarySnapshot", () => {
 });
 
 describe("itinerary helpers", () => {
+  test("setTripBasics preserves ISO dates when building days", () => {
+    useItineraryStore.getState().reset();
+    useItineraryStore.getState().setTripBasics({
+      destination_id: "goa",
+      destination_name: "Goa",
+      start_date: "2026-04-30",
+      end_date: "2026-05-03",
+      travelers: 1,
+      vibe: "chill",
+    });
+
+    assert.deepEqual(
+      useItineraryStore.getState().days.map((d) => d.date),
+      ["2026-04-30", "2026-05-01", "2026-05-02", "2026-05-03"],
+    );
+  });
+
   test("timeToMinutes / minutesToTime are inverses", () => {
     for (const t of ["00:00", "09:30", "13:45", "23:59"]) {
       assert.equal(minutesToTime(timeToMinutes(t)), t);

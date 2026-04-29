@@ -1,5 +1,4 @@
 import { headers } from "next/headers";
-import { notFound } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, CalendarPlus, Compass, Printer } from "lucide-react";
 import { EditableTripCanvas } from "@/components/itinerary/EditableTripCanvas";
@@ -29,7 +28,31 @@ export default async function TripPage({
 }) {
   const { id } = await params;
   const snap = await fetchTrip(id);
-  if (!snap) notFound();
+  if (!snap) {
+    return (
+      <section className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center px-5 py-16 sm:px-8">
+        <div className="rounded-[8px] border border-[color:var(--color-cream-200)] bg-white/80 p-6 shadow-[0_18px_60px_rgba(15,35,55,0.08)]">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--color-ink-400)]">
+            trip link unavailable
+          </p>
+          <h1 className="mt-3 text-2xl font-semibold text-[color:var(--color-navy-900)]">
+            This itinerary is no longer saved.
+          </h1>
+          <p className="mt-3 text-sm leading-6 text-[color:var(--color-ink-600)]">
+            Start a fresh voice session and finalize the trip again. New trip
+            links are now saved across local dev server restarts.
+          </p>
+          <Link
+            href="/"
+            className="mt-5 inline-flex items-center gap-1.5 rounded-full border border-[color:var(--color-cream-200)] bg-white px-4 py-2 text-sm font-medium text-[color:var(--color-navy-900)] transition-colors hover:bg-[color:var(--color-cream-50)]"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            plan another trip
+          </Link>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="mx-auto w-full max-w-4xl flex-1 px-5 py-8 sm:px-8">

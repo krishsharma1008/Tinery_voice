@@ -127,14 +127,14 @@ const emptyTrip: Trip = {
 };
 
 function buildDays(start_iso: string, end_iso: string): ItineraryDay[] {
-  const start = new Date(start_iso + "T00:00:00");
-  const end = new Date(end_iso + "T00:00:00");
+  const start = new Date(start_iso + "T00:00:00Z");
+  const end = new Date(end_iso + "T00:00:00Z");
   const days: ItineraryDay[] = [];
   let i = 0;
   for (
     let cur = new Date(start);
     cur.getTime() <= end.getTime();
-    cur.setDate(cur.getDate() + 1)
+    cur.setUTCDate(cur.getUTCDate() + 1)
   ) {
     days.push({
       index: i++,
@@ -356,7 +356,7 @@ export function minutesToTime(mins: number): string {
 
 export function dateToWeekday(iso: string): import("@/lib/data/types").Weekday {
   // Sun=0..Sat=6
-  const d = new Date(iso + "T00:00:00").getDay();
+  const d = new Date(iso + "T00:00:00Z").getUTCDay();
   const map: import("@/lib/data/types").Weekday[] = [
     "sun",
     "mon",

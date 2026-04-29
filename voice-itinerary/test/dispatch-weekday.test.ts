@@ -2,10 +2,12 @@ import { describe, test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { dispatchToolCall } from "@/lib/realtime/tools";
 import { useItineraryStore } from "@/lib/store/itinerary";
+import { useVoiceStore } from "@/lib/store/voice";
 
 beforeEach(() => {
   // Reset the Zustand store between tests so previous mutations don't bleed.
   useItineraryStore.getState().reset();
+  useVoiceStore.getState().reset();
 });
 
 describe("set_trip_basics weekday validation", () => {
@@ -17,6 +19,7 @@ describe("set_trip_basics weekday validation", () => {
         start_date: "2026-04-30", // Thursday
         end_date: "2026-05-03", // Sunday
         travelers: 1,
+        start_kind: "weekday",
         start_weekday: "thu",
         end_weekday: "sun",
       }),
@@ -39,6 +42,7 @@ describe("set_trip_basics weekday validation", () => {
         start_date: "2026-04-29", // Wednesday
         end_date: "2026-05-02", // Saturday
         travelers: 1,
+        start_kind: "weekday",
         start_weekday: "thu",
         end_weekday: "sun",
       }),
@@ -65,6 +69,8 @@ describe("set_trip_basics weekday validation", () => {
         start_date: "2026-04-30", // Thursday — correct
         end_date: "2026-05-02", // Saturday — but user said Sunday
         travelers: 1,
+        start_kind: "date",
+        start_weekday: "thu",
         end_weekday: "sun",
       }),
     );
@@ -75,7 +81,32 @@ describe("set_trip_basics weekday validation", () => {
     assert.equal(obj.corrected_end_date, "2026-05-03");
   });
 
-  test("no weekday args means no validation runs (back-compat)", async () => {
+  test("rejects dropping Sunday when user said Thursday to Sunday", async () => {
+    useVoiceStore
+      .getState()
+      .appendUserTurn("u1", "I want to book a trip to Goa from Thursday to Sunday.");
+
+    const result = await dispatchToolCall(
+      "set_trip_basics",
+      JSON.stringify({
+        destination: "goa",
+        start_date: "2026-04-30", // Thursday — correct
+        end_date: "2026-05-02", // Saturday — model dropped Sunday
+        travelers: 1,
+        start_kind: "weekday",
+        start_weekday: "thu",
+        end_weekday: "sat",
+      }),
+    );
+
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.error, "weekday_not_in_user_speech");
+    const obj = result as unknown as { corrected_end_date: string };
+    assert.equal(obj.corrected_end_date, "2026-05-03");
+  });
+
+  test("rejects missing weekday metadata", async () => {
     const result = await dispatchToolCall(
       "set_trip_basics",
       JSON.stringify({
@@ -85,6 +116,7 @@ describe("set_trip_basics weekday validation", () => {
         travelers: 1,
       }),
     );
-    assert.equal(result.ok, true);
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "invalid_arguments");
   });
 });

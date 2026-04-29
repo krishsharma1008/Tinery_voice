@@ -42,6 +42,13 @@ type VoiceSession = {
 
 const Ctx = createContext<VoiceSession | null>(null);
 
+function localIsoDate(date = new Date()): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 export function useVoiceSession(): VoiceSession {
   const v = useContext(Ctx);
   if (!v) throw new Error("useVoiceSession must be used inside VoiceSessionProvider");
@@ -56,8 +63,8 @@ async function fetchCommitments() {
   const today = new Date();
   const horizon = new Date();
   horizon.setDate(today.getDate() + 60);
-  const start = today.toISOString().slice(0, 10);
-  const end = horizon.toISOString().slice(0, 10);
+  const start = localIsoDate(today);
+  const end = localIsoDate(horizon);
   try {
     const res = await fetch(
       `/api/calendar/events?source=${mode}&start=${start}&end=${end}`,
@@ -142,7 +149,9 @@ export function VoiceSessionProvider({
     if (conn !== "idle" && conn !== "closed") return;
     setHint(null);
 
-    const today = new Date().toISOString().slice(0, 10);
+    console.log("%c[voice] connect — build v4 (transcript cross-check)", "color:#6cf;font-weight:bold");
+
+    const today = localIsoDate();
 
     const mode = process.env.NEXT_PUBLIC_CALENDAR_MODE;
     let existing_commitments: Awaited<

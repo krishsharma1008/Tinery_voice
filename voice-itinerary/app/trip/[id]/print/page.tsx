@@ -1,5 +1,4 @@
 import { headers } from "next/headers";
-import { notFound } from "next/navigation";
 import { TripView } from "@/components/itinerary/TripView";
 import { PrintAutoOpen } from "./PrintAutoOpen";
 
@@ -34,7 +33,18 @@ export default async function TripPrintPage({
 }) {
   const { id } = await params;
   const snap = await fetchTrip(id);
-  if (!snap) notFound();
+  if (!snap) {
+    return (
+      <main className="mx-auto w-full max-w-3xl px-6 py-12">
+        <h1 className="text-2xl font-semibold text-[color:var(--color-navy-900)]">
+          This itinerary is no longer saved.
+        </h1>
+        <p className="mt-3 text-sm text-[color:var(--color-ink-600)]">
+          Return to the planner and finalize the trip again.
+        </p>
+      </main>
+    );
+  }
 
   return (
     <main className="mx-auto w-full max-w-3xl px-6 py-6">

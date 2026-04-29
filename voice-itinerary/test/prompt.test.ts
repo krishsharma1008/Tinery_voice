@@ -11,8 +11,8 @@ describe("prompt.buildSystemPrompt", () => {
       "RULE — show, then tell",
       "Information hierarchy",
       "Day-by-day planning",
-      "Question budget",
-      "Aggressive defaults",
+      "Guided personalization",
+      "Personalization defaults",
       "Tool discipline",
       "Flights. When the user mentions",
       "Hospitality (stays, nearby, transport)",
@@ -32,6 +32,41 @@ describe("prompt.buildSystemPrompt", () => {
   test("injects current_date into the prompt", () => {
     const prompt = buildSystemPrompt({ current_date: "2026-04-26" });
     assert.ok(prompt.includes("Current date: 2026-04-26"));
+  });
+
+  test("requires guided personalization before drafting", () => {
+    const prompt = buildSystemPrompt({ current_date: "2026-04-26" });
+    assert.ok(prompt.includes("Ask exactly two quick preference questions"));
+    assert.ok(prompt.includes("paint the skeleton only"));
+    assert.ok(prompt.includes("Do NOT call"));
+    assert.ok(prompt.includes("suggest_stays"));
+    assert.ok(prompt.includes("propose_full_itinerary yet"));
+    assert.ok(prompt.includes("call set_preferences for the user's answer"));
+    assert.ok(prompt.includes("Any budget"));
+    assert.ok(prompt.includes("must-see"));
+    assert.ok(prompt.includes("must-avoid"));
+  });
+
+  test("removes immediate auto-fill instructions", () => {
+    const prompt = buildSystemPrompt({ current_date: "2026-04-26" });
+    assert.ok(!prompt.includes("Do NOT ask \"what kind of"));
+    assert.ok(!prompt.includes("BEFORE asking any Tier-3"));
+    assert.ok(!prompt.includes("BEFORE asking the user"));
+    assert.ok(!prompt.includes("RIGHT AFTER set_trip_basics + set_day_modes"));
+    assert.ok(!prompt.includes("Aggressive defaults"));
+  });
+
+  test("documents the intended personalization tool sequence", () => {
+    const prompt = buildSystemPrompt({ current_date: "2026-04-26" });
+    const skeleton = prompt.indexOf("set_trip_basics + set_day_modes");
+    const preferences = prompt.indexOf("set_preferences");
+    const stays = prompt.lastIndexOf("suggest_stays");
+    const draft = prompt.lastIndexOf("propose_full_itinerary");
+
+    assert.ok(skeleton !== -1, "skeleton tools are named");
+    assert.ok(preferences > skeleton, "preferences happen after skeleton");
+    assert.ok(stays > preferences, "stays happen after preferences");
+    assert.ok(draft > preferences, "draft happens after preferences");
   });
 
   test("renders existing_commitments block when provided", () => {

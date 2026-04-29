@@ -21,7 +21,7 @@ import {
   getTransportNotes,
 } from "@/lib/data";
 import { searchFlights } from "@/lib/data/flights";
-import { nextWeekdayDate, weekdayOf } from "./dateTable";
+import { addDays, nextWeekdayDate, weekdayOf } from "./dateTable";
 import {
   type DayMode,
   dateToWeekday,
@@ -29,6 +29,7 @@ import {
   timeToMinutes,
   useItineraryStore,
 } from "@/lib/store/itinerary";
+import { useVoiceStore } from "@/lib/store/voice";
 import {
   areaToRegion,
   planDay,
@@ -50,7 +51,7 @@ export const TOOL_DEFINITIONS = [
     description:
       "Set the trip's destination, dates, traveler count, and overall vibe. " +
       "Use as soon as you know these. Always paint the canvas with this BEFORE speaking the spoken summary. " +
-      "If the user named a weekday for the start or end (e.g. 'Thursday to Sunday'), you MUST pass start_weekday and end_weekday so the dispatcher can verify the date you picked. Mismatches are returned as ok:false with corrected ISO dates — accept the correction and re-call.",
+      "ALWAYS pass start_kind, start_weekday, end_weekday — the dispatcher cross-checks every call against what the user said and rejects bad picks with ok:false + corrected ISO dates. Accept the correction aloud and re-call.",
     parameters: {
       type: "object",
       properties: {
@@ -61,7 +62,7 @@ export const TOOL_DEFINITIONS = [
         start_date: {
           type: "string",
           description:
-            "ISO yyyy-mm-dd. Read off the date table in the system prompt — do NOT compute dates yourself.",
+            "ISO yyyy-mm-dd. Read off the date table in the system prompt — do NOT compute dates yourself. If the user named a weekday (e.g. 'Thursday'), pick the FIRST row in the date table STRICTLY AFTER today with that weekday — never today, even if today's weekday matches.",
         },
         end_date: {
           type: "string",
@@ -80,27 +81,43 @@ export const TOOL_DEFINITIONS = [
             "mixed",
           ],
         },
+        start_kind: {
+          type: "string",
+          enum: ["weekday", "date", "today", "tomorrow", "relative"],
+          description:
+            "Required. How the user described the start: 'weekday' (they said 'Thursday', 'next Sunday', etc.), 'date' (explicit date like 'May 15'), 'today' (they said 'today'/'now'), 'tomorrow' (they said 'tomorrow'), 'relative' ('next week', 'in two weeks'). The dispatcher uses this to verify start_date: 'weekday' forces start_date to be the next matching row STRICTLY AFTER today; 'today' forces start_date == today; 'tomorrow' forces start_date == today+1.",
+        },
         start_weekday: {
           type: "string",
           enum: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
           description:
-            "Required when the user named the start day by weekday. The dispatcher rejects start_date whose weekday doesn't match.",
+            "Required. The weekday of start_date as read from the date table. The dispatcher rejects any start_date whose actual weekday doesn't match this.",
         },
         end_weekday: {
           type: "string",
           enum: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
           description:
-            "Required when the user named the end day by weekday. Same validation as start_weekday.",
+            "Required. The weekday of end_date as read from the date table. Same validation as start_weekday.",
         },
       },
-      required: ["destination", "start_date", "end_date", "travelers"],
+      required: [
+        "destination",
+        "start_date",
+        "end_date",
+        "travelers",
+        "start_kind",
+        "start_weekday",
+        "end_weekday",
+      ],
     },
   },
   {
     type: "function" as const,
     name: "set_day_modes",
     description:
-      "Tag every day as work, leisure, travel, chill, or adventure. Length must equal trip duration.",
+      "Tag every day as work, leisure, travel, chill, or adventure. Length must equal trip duration. " +
+      "The array is ZERO-INDEXED: modes[0] is the user's 'day 1', modes[1] is 'day 2', etc. " +
+      "When the user edits a single day (e.g. 'make day 1 chill'), send the FULL array with only the targeted index changed and every other slot kept at its current value — do NOT shift indices.",
     parameters: {
       type: "object",
       properties: {
@@ -110,6 +127,8 @@ export const TOOL_DEFINITIONS = [
             type: "string",
             enum: ["work", "leisure", "travel", "chill", "adventure"],
           },
+          description:
+            "Zero-indexed: modes[0] = day 1 in the UI, modes[1] = day 2, etc. Length must match trip duration.",
         },
       },
       required: ["modes"],
@@ -119,11 +138,15 @@ export const TOOL_DEFINITIONS = [
     type: "function" as const,
     name: "add_fixed_event",
     description:
-      "Pin a non-negotiable event (meeting, flight, reservation) to a specific day and time. The scheduler will treat this as a hard constraint.",
+      "Pin a non-negotiable event (meeting, flight, reservation) to a specific day and time. The scheduler will treat this as a hard constraint. day_index is ZERO-INDEXED: user's 'day 1' = day_index 0.",
     parameters: {
       type: "object",
       properties: {
-        day_index: { type: "integer", minimum: 0 },
+        day_index: {
+          type: "integer",
+          minimum: 0,
+          description: "Zero-indexed. User's 'day 1' = 0, 'day 2' = 1, etc.",
+        },
         title: { type: "string" },
         type: {
           type: "string",
@@ -158,11 +181,16 @@ export const TOOL_DEFINITIONS = [
     description:
       "Schedule an activity on a specific day. Routed through the constraint-aware scheduler. " +
       "If the slot conflicts with a fixed event, breaks opening hours, or violates transit buffers, " +
-      "you'll get { ok:false, conflict, alternatives } — pivot aloud rather than retrying blindly.",
+      "you'll get { ok:false, conflict, alternatives } — pivot aloud rather than retrying blindly. " +
+      "day_index is ZERO-INDEXED: user's 'day 1' = day_index 0.",
     parameters: {
       type: "object",
       properties: {
-        day_index: { type: "integer", minimum: 0 },
+        day_index: {
+          type: "integer",
+          minimum: 0,
+          description: "Zero-indexed. User's 'day 1' = 0, 'day 2' = 1, etc.",
+        },
         start_time: { type: "string", description: "24h HH:mm" },
         duration_min: { type: "integer", minimum: 15, maximum: 480 },
         activity_id: {
@@ -181,12 +209,17 @@ export const TOOL_DEFINITIONS = [
   {
     type: "function" as const,
     name: "move_activity",
-    description: "Move a scheduled activity to a different day or time.",
+    description:
+      "Move a scheduled activity to a different day or time. to_day_index is ZERO-INDEXED: user's 'day 3' = to_day_index 2.",
     parameters: {
       type: "object",
       properties: {
         activity_id: { type: "string" },
-        to_day_index: { type: "integer", minimum: 0 },
+        to_day_index: {
+          type: "integer",
+          minimum: 0,
+          description: "Zero-indexed. User's 'day 1' = 0, 'day 2' = 1, etc.",
+        },
         to_start_time: { type: "string" },
       },
       required: ["activity_id", "to_day_index", "to_start_time"],
@@ -269,11 +302,15 @@ export const TOOL_DEFINITIONS = [
     type: "function" as const,
     name: "plan_day",
     description:
-      "Draft slots for ONE day from the destination's canonical day templates. Use this BEFORE asking the user 'what kind of activities do you like' — it returns ready-to-add slots that respect fixed_events, closed_days, opening hours, transit buffers. After it succeeds, call add_activity in parallel for each returned slot. The rationale field is a ≤25-word sentence you can voice verbatim.",
+      "Draft slots for ONE day from the destination's canonical day templates after guided personalization is complete. It returns ready-to-add slots that respect fixed_events, closed_days, opening hours, transit buffers. After it succeeds, call add_activity in parallel for each returned slot. The rationale field is a ≤25-word sentence you can voice verbatim. day_index is ZERO-INDEXED: user's 'day 1' = day_index 0.",
     parameters: {
       type: "object",
       properties: {
-        day_index: { type: "integer", minimum: 0 },
+        day_index: {
+          type: "integer",
+          minimum: 0,
+          description: "Zero-indexed. User's 'day 1' = 0, 'day 2' = 1, etc.",
+        },
         intent: {
           type: "string",
           enum: [
@@ -304,7 +341,7 @@ export const TOOL_DEFINITIONS = [
     type: "function" as const,
     name: "propose_full_itinerary",
     description:
-      "Draft EVERY remaining day in one shot using canonical templates. Honours each day's mode, avoids template repetition, skips transit days. Returns slots[] per day plus a single ≤25-word summary you can voice. Call this RIGHT AFTER set_trip_basics + set_day_modes when the user has not given specific activity preferences — it's how we fill days without padding the conversation.",
+      "Draft EVERY remaining day in one shot using canonical templates. Honours each day's mode, avoids template repetition, skips transit days. Returns slots[] per day plus a single ≤25-word summary you can voice. Use after guided personalization is complete, or immediately only when the user says 'just make it' / 'surprise me' or already gave enough preferences.",
     parameters: {
       type: "object",
       properties: {
@@ -376,7 +413,7 @@ export const TOOL_DEFINITIONS = [
     type: "function" as const,
     name: "suggest_stays",
     description:
-      "Rank top stays for a destination by vibe, budget, work-friendliness, and area. Use proactively right after set_trip_basics so the stay block paints in the same paint pass as the day strip. Returns up to 3 picks with a one-line rationale per pick.",
+      "Rank top stays for a destination by vibe, budget, work-friendliness, and area. Use after guided personalization so the stay reflects the user's answers. Returns up to 3 picks with a one-line rationale per pick.",
     parameters: {
       type: "object",
       properties: {
@@ -455,12 +492,9 @@ const setTripBasicsZ = z.object({
   vibe: z
     .enum(["chill", "adventure", "foodie", "cultural", "party", "family", "mixed"])
     .optional(),
-  start_weekday: z
-    .enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"])
-    .optional(),
-  end_weekday: z
-    .enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"])
-    .optional(),
+  start_kind: z.enum(["weekday", "date", "today", "tomorrow", "relative"]),
+  start_weekday: z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]),
+  end_weekday: z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]),
 });
 
 const dayModeZ = z.enum(["work", "leisure", "travel", "chill", "adventure"]);
@@ -574,6 +608,13 @@ export type ToolResult =
   | { ok: true; summary: string; [k: string]: unknown }
   | { ok: false; error: string; summary: string; [k: string]: unknown };
 
+function localIsoDate(date = new Date()): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 export async function dispatchToolCall(
   name: string,
   argsJson: string,
@@ -608,54 +649,163 @@ export async function dispatchToolCall(
           };
         }
 
-        // WS-2 weekday validation. If the user named the start/end weekday,
-        // the model passes start_weekday/end_weekday; we reject mismatches
-        // with corrected dates so the model can self-correct aloud.
-        const today = new Date().toISOString().slice(0, 10);
-        if (a.start_weekday) {
-          const actualStartWd = weekdayOf(a.start_date);
-          if (actualStartWd !== a.start_weekday) {
-            const corrected_start_date = nextWeekdayDate(today, a.start_weekday);
-            // Preserve trip duration when shifting.
-            const startMs = new Date(a.start_date + "T00:00:00Z").getTime();
-            const endMs = new Date(a.end_date + "T00:00:00Z").getTime();
-            const durDays = Math.max(0, Math.round((endMs - startMs) / 86_400_000));
-            const corrected_end_date = (() => {
-              const d = new Date(corrected_start_date + "T00:00:00Z");
-              d.setUTCDate(d.getUTCDate() + durDays);
-              return d.toISOString().slice(0, 10);
-            })();
+        // Date validation pipeline. Three layers:
+        //   1. start_weekday must match the actual weekday of start_date
+        //   2. end_weekday   must match the actual weekday of end_date
+        //   3. start_kind must be consistent with start_date
+        //      ("weekday" → start_date strictly after today; "today" →
+        //       start_date == today; "tomorrow" → start_date == today+1).
+        //
+        // Layer 3 catches the failure mode where the model picks today as
+        // start_date and labels it with today's weekday — both layers 1+2
+        // pass (the labels match) but the user said a future weekday.
+        const today = localIsoDate();
+
+        const buildShiftedEnd = (newStart: string): string => {
+          const startMs = new Date(a.start_date + "T00:00:00Z").getTime();
+          const endMs = new Date(a.end_date + "T00:00:00Z").getTime();
+          const durDays = Math.max(0, Math.round((endMs - startMs) / 86_400_000));
+          return addDays(newStart, durDays);
+        };
+
+        const actualStartWd = weekdayOf(a.start_date);
+        if (actualStartWd !== a.start_weekday) {
+          const corrected_start_date = nextWeekdayDate(today, a.start_weekday);
+          const corrected_end_date = buildShiftedEnd(corrected_start_date);
+          return {
+            ok: false,
+            error: "weekday_mismatch",
+            summary: `${a.start_weekday[0]?.toUpperCase()}${a.start_weekday.slice(1)} is ${corrected_start_date}, not ${a.start_date} (a ${actualStartWd}). Re-call with the corrected dates.`,
+            expected_start_weekday: a.start_weekday,
+            actual_start_weekday: actualStartWd,
+            corrected_start_date,
+            corrected_end_date,
+          };
+        }
+        const actualEndWd = weekdayOf(a.end_date);
+        if (actualEndWd !== a.end_weekday) {
+          const corrected_end_date = nextWeekdayDate(
+            a.start_date,
+            a.end_weekday,
+            true,
+          );
+          return {
+            ok: false,
+            error: "weekday_mismatch",
+            summary: `${a.end_weekday[0]?.toUpperCase()}${a.end_weekday.slice(1)} is ${corrected_end_date}, not ${a.end_date} (a ${actualEndWd}). Re-call with the corrected end date.`,
+            expected_end_weekday: a.end_weekday,
+            actual_end_weekday: actualEndWd,
+            corrected_start_date: a.start_date,
+            corrected_end_date,
+          };
+        }
+
+        // Loophole closer: a "weekday"/"date"/"relative" trip must NOT
+        // start on today. The only way start_date can equal current_date
+        // is start_kind="today". This catches the failure mode where the
+        // model picked today and labeled it "date" / "weekday" to bypass
+        // validation.
+        if (a.start_date === today && a.start_kind !== "today") {
+          return {
+            ok: false,
+            error: "start_today_without_today_kind",
+            summary: `start_date is today (${today}) but start_kind is "${a.start_kind}". If the user said "today"/"now", set start_kind="today". Otherwise pick a future date — the user named a weekday or specific date that isn't today.`,
+            current_date: today,
+          };
+        }
+
+        // Transcript cross-check: if the user actually said specific
+        // weekday names in their last few turns, the model's
+        // start_weekday / end_weekday MUST be drawn from that set.
+        // Catches the failure mode where speech is "Wednesday" but the
+        // model invents "Tuesday".
+        const recentUserText = useVoiceStore
+          .getState()
+          .transcript.filter((t) => t.role === "user")
+          .slice(-3)
+          .map((t) => t.text)
+          .join(" ");
+        const mentionedWeekdays = extractWeekdays(recentUserText);
+        if (mentionedWeekdays.size > 0) {
+          const claimedWeekdays = new Set([a.start_weekday, a.end_weekday]);
+          const missingUserWeekdays = Array.from(mentionedWeekdays).filter(
+            (wd) => !claimedWeekdays.has(wd),
+          );
+          const claimedNothingUserSaid =
+            !mentionedWeekdays.has(a.start_weekday) &&
+            !mentionedWeekdays.has(a.end_weekday);
+
+          // If the user said a range like "Thursday to Sunday", both
+          // endpoints must survive into the tool call. A partial match
+          // (thu/sat) is still wrong because it drops Sunday.
+          if (missingUserWeekdays.length > 0 || claimedNothingUserSaid) {
+            const userList = Array.from(mentionedWeekdays).join("/");
+            const missing = missingUserWeekdays[0];
+            const correction =
+              missing && a.start_weekday !== missing
+                ? {
+                    corrected_start_date: a.start_date,
+                    corrected_end_date: nextWeekdayDate(
+                      a.start_date,
+                      missing,
+                      true,
+                    ),
+                    corrected_end_weekday: missing,
+                  }
+                : {};
             return {
               ok: false,
-              error: "weekday_mismatch",
-              summary: `${a.start_weekday[0]?.toUpperCase()}${a.start_weekday.slice(1)} is ${corrected_start_date}, not ${a.start_date} (a ${actualStartWd}). Re-call with the corrected dates.`,
-              expected_start_weekday: a.start_weekday,
-              actual_start_weekday: actualStartWd,
-              corrected_start_date,
+              error: "weekday_not_in_user_speech",
+              summary: `User said ${userList} but you picked start_weekday="${a.start_weekday}", end_weekday="${a.end_weekday}". Re-call with the weekdays the user actually named.`,
+              user_mentioned: Array.from(mentionedWeekdays),
+              you_claimed: [a.start_weekday, a.end_weekday],
+              ...correction,
+            };
+          }
+        }
+
+        // Layer 3 — start_kind ↔ start_date consistency.
+        if (a.start_kind === "weekday") {
+          // The user named a weekday; the start MUST be strictly after today.
+          // nextWeekdayDate(today, X, inclusive_today=false) is the canonical
+          // answer.
+          const expected = nextWeekdayDate(today, a.start_weekday);
+          if (a.start_date !== expected) {
+            const corrected_end_date = buildShiftedEnd(expected);
+            return {
+              ok: false,
+              error: "start_kind_mismatch",
+              summary: `User named a weekday — the next ${a.start_weekday} is ${expected}, not ${a.start_date}. Re-call with start_date=${expected} and shift end accordingly.`,
+              expected_start_date: expected,
+              corrected_start_date: expected,
+              corrected_end_date,
+            };
+          }
+        } else if (a.start_kind === "today") {
+          if (a.start_date !== today) {
+            const corrected_end_date = buildShiftedEnd(today);
+            return {
+              ok: false,
+              error: "start_kind_mismatch",
+              summary: `User said 'today' — start_date must be ${today}, not ${a.start_date}.`,
+              corrected_start_date: today,
+              corrected_end_date,
+            };
+          }
+        } else if (a.start_kind === "tomorrow") {
+          const tomorrow = addDays(today, 1);
+          if (a.start_date !== tomorrow) {
+            const corrected_end_date = buildShiftedEnd(tomorrow);
+            return {
+              ok: false,
+              error: "start_kind_mismatch",
+              summary: `User said 'tomorrow' — start_date must be ${tomorrow}, not ${a.start_date}.`,
+              corrected_start_date: tomorrow,
               corrected_end_date,
             };
           }
         }
-        if (a.end_weekday) {
-          const actualEndWd = weekdayOf(a.end_date);
-          if (actualEndWd !== a.end_weekday) {
-            // Shift end forward to the next matching weekday from the start.
-            const corrected_end_date = nextWeekdayDate(
-              a.start_date,
-              a.end_weekday,
-              true,
-            );
-            return {
-              ok: false,
-              error: "weekday_mismatch",
-              summary: `${a.end_weekday[0]?.toUpperCase()}${a.end_weekday.slice(1)} is ${corrected_end_date}, not ${a.end_date} (a ${actualEndWd}). Re-call with the corrected end date.`,
-              expected_end_weekday: a.end_weekday,
-              actual_end_weekday: actualEndWd,
-              corrected_start_date: a.start_date,
-              corrected_end_date,
-            };
-          }
-        }
+        // start_kind === "date" or "relative" → trust start_date as-is.
 
         store.setTripBasics({
           destination_id: dest.id,
@@ -1194,6 +1344,31 @@ export async function dispatchToolCall(
     console.error("[tools] dispatch error", err);
     return { ok: false, error: msg, summary: msg };
   }
+}
+
+const WEEKDAY_TOKENS: ReadonlyArray<readonly [string, "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun"]> = [
+  ["monday", "mon"],
+  ["tuesday", "tue"],
+  ["wednesday", "wed"],
+  ["thursday", "thu"],
+  ["friday", "fri"],
+  ["saturday", "sat"],
+  ["sunday", "sun"],
+];
+
+/**
+ * Pull weekday short codes out of arbitrary user speech. Used by the
+ * dispatcher to cross-check that the model's start_weekday/end_weekday
+ * claim is actually grounded in what the user said — catches the failure
+ * mode where speech is "Wednesday" but the model fabricates "Tuesday".
+ */
+function extractWeekdays(text: string): Set<"mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun"> {
+  const found = new Set<"mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun">();
+  const lower = text.toLowerCase();
+  for (const [longWd, shortWd] of WEEKDAY_TOKENS) {
+    if (lower.includes(longWd)) found.add(shortWd);
+  }
+  return found;
 }
 
 function explainConflict(c: Conflict): string {
